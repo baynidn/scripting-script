@@ -5,6 +5,7 @@ import type { ModuleEntry, Settings, TargetId, UpdateResult, UpdateSummary } fro
 import {
   composeUpdatedContent,
   deriveNameFromUrl,
+  extractCategory,
   extractSubscribedUrl,
   fileNameOf,
   isModuleContent,
@@ -254,7 +255,10 @@ export async function updateModule(entry: ModuleEntry, settings: Settings): Prom
   }
 
   const remoteHeader = parseModuleHeader(remote, entry.target)
-  const content = composeUpdatedContent(remote, url, entry.target)
+  // 更新时保留本地 #!category，不以上游的值覆盖（与 SurgeModuleTools 2.04.2 本地改版一致）
+  const content = composeUpdatedContent(remote, url, entry.target, new Date(), {
+    preserveCategory: localHeader.category,
+  })
   try {
     await writeTextFile(entry.path, content)
   } catch (error) {
@@ -355,6 +359,7 @@ export async function installFromURL(
   let path = `${folderPath}/${suggested}`
 
   // 同名文件存在时，同源则视为重新安装直接覆盖，不同源则另存副本
+  let existingCategory: string | null = null
   if (FileManager.existsSync(path)) {
     let existing = ""
     try {
@@ -364,11 +369,16 @@ export async function installFromURL(
     }
     if (extractSubscribedUrl(existing) !== url) {
       path = uniquePath(folderPath, baseName, extension)
+    } else {
+      // 同源重新安装视为更新，保留本地 #!category
+      existingCategory = extractCategory(existing)
     }
   }
 
   const fileName = fileNameOf(path)
-  const content = composeUpdatedContent(remote, url, target)
+  const content = composeUpdatedContent(remote, url, target, new Date(), {
+    preserveCategory: existingCategory,
+  })
   await ensureFolder(folderPath)
   await writeTextFile(path, content)
   const stat = FileManager.statSync(path)
