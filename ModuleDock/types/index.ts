@@ -33,6 +33,8 @@ export type ModuleHeader = {
   rawDesc: string
   /** #SUBSCRIBED 后面的订阅链接 */
   subscribedUrl: string | null
+  /** #!category 的值；没有该行时为 null */
+  category: string | null
 }
 
 /** 单个模块在界面上的状态 */
