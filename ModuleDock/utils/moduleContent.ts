@@ -6,6 +6,8 @@ import { detectTargetFromFileName } from "./targets"
 const NAME_RE = /^#!\s*name\s*=\s*(.*?)\s*$/im
 /** 匹配 #!desc 行 */
 const DESC_RE = /^#!\s*desc\s*=\s*(.*?)\s*$/im
+/** 匹配 #!category 行（模块里的分类字段）；值两侧只吃横向空白，避免 \s 吃掉换行导致空值串行 */
+const CATEGORY_RE = /^#![ \t]*category[ \t]*=[ \t]*(.*?)[ \t]*$/im
 /** 匹配 #SUBSCRIBED 行 */
 const SUBSCRIBED_RE = /^#SUBSCRIBED\s+(.*?)\s*$/im
 /** 匹配本工具写入的目标标记行 */
@@ -150,6 +152,32 @@ export function resolveTarget(raw: string, fileName?: string, hint?: TargetId | 
   return "surge"
 }
 
+/** 取出文件里的 #!category 值；没有该行返回 null（与空值区分开） */
+export function extractCategory(raw: string): string | null {
+  const match = normalizeNewlines(raw).match(CATEGORY_RE)
+  return match ? match[1].trim() : null
+}
+
+/**
+ * 把本地保留的 #!category 写回内容：
+ * 有该行则替换值，没有则插在 #!name 行后；category 为 null 表示本地无分类，不动上游的值。
+ * 与 SurgeModuleTools 2.04.2 本地改版的保留逻辑一致。
+ */
+export function applyPreservedCategory(content: string, category: string | null): string {
+  if (category === null) {
+    return content
+  }
+  if (CATEGORY_RE.test(content)) {
+    return content.replace(CATEGORY_RE, `#!category=${category}`)
+  }
+  const nameMatch = content.match(/^#!\s*name\s*=.*$/im)
+  if (nameMatch && nameMatch.index !== undefined) {
+    const insertAt = nameMatch.index + nameMatch[0].length
+    return `${content.slice(0, insertAt)}\n#!category=${category}${content.slice(insertAt)}`
+  }
+  return `#!category=${category}\n${content}`
+}
+
 /** 解析模块头部信息 */
 export function parseModuleHeader(raw: string, target?: TargetId): ModuleHeader {
   const content = normalizeNewlines(raw)
@@ -177,6 +205,7 @@ export function parseModuleHeader(raw: string, target?: TargetId): ModuleHeader 
     desc: stripStamp(rawDesc),
     rawDesc,
     subscribedUrl: subscribedMatch ? subscribedMatch[1].trim() : null,
+    category: extractCategory(content),
   }
 }
 
@@ -235,12 +264,15 @@ function removeMarkers(body: string): string {
 /**
  * 把远端内容合成为本地模块内容。
  * Surge / Loon / Shadowrocket：在最后一条 #! 指令后插入链接区块，并给 #!desc 加时间戳。
+ * options.preserveCategory：本地保留的 #!category（null 表示本地无分类，不动上游的值）；
+ * 传入后更新时不再以上游的分类覆盖本地分类。Stash 覆写没有 #!category，不处理。
  */
 export function composeUpdatedContent(
   remote: string,
   sourceUrl: string,
   target: TargetId = "surge",
-  at: Date = new Date()
+  at: Date = new Date(),
+  options: { preserveCategory?: string | null } = {}
 ): string {
   let body = removeMarkers(normalizeNewlines(remote))
 
@@ -265,6 +297,8 @@ export function composeUpdatedContent(
   )
   body = body.replace(/\n{3,}/g, "\n\n")
   body = body.replace(/^#!\s*desc\s*=\s*/im, `#!desc=🔗 [${formatStamp(at)}] `)
+  // 保留本地 #!category：更新时不以上游的值覆盖（与 SurgeModuleTools 2.04.2 本地改版一致）
+  body = applyPreservedCategory(body, options.preserveCategory ?? null)
   return `${body.replace(/\s+$/, "")}\n`
 }
 
